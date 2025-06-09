@@ -48,7 +48,7 @@ def google_login(email: str, name: str, cors_headers: dict) -> dict:
     if resp.get("Users"):
         print("Found existing user:", resp["Users"])
         user_id = resp["Users"][0]["Username"]
-        authtype = "existing"
+        authType = "existing"
     else:
         # 2) Auto-signup via Invoke, now passing a generated id
         user_id = str(uuid.uuid4())
@@ -73,7 +73,7 @@ def google_login(email: str, name: str, cors_headers: dict) -> dict:
                 "headers": cors_headers,
                 "body": data.get("body", json.dumps({"message": "Signup failed"}))
             }
-        authtype = "new"
+        authType = "new"
 
     # 3) Issue session cookie & prepare response body
     # — generate & persist session —
@@ -103,7 +103,7 @@ def google_login(email: str, name: str, cors_headers: dict) -> dict:
             info[f] = name
     # if in future you want to fetch from Cognito instead, you can replicate the admin_get_user logic from form.py
 
-    body = {"message": "Login successful (google)", **info, "authtype": authtype}
+    body = {"message": "Login successful (google)", **info, "authType": authType}
     response = {"statusCode": 200, "headers": headers, "body": json.dumps(body)}
     print("Google-based Response: ", response)
     return response
