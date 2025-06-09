@@ -112,7 +112,7 @@ def form_login(email: str, password: str, cors_headers: dict) -> dict:
             "Set-Cookie": ",".join(cookies),
             "Content-Type": "application/json"
         }
-        body = {"message": "Login successful (form)", **info}
+        body = {"message": "Login successful (form)", **info, "authtype": "existing"}
         response = {"statusCode": 200, "headers": headers, "body": json.dumps(body)}
         print("Form login response:", response)
         return response
