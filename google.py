@@ -10,33 +10,54 @@ import os
 import json
 import uuid
 import boto3
-import time
-from datetime import datetime, timezone
+from utils import invoke, AuthorizationError
 
-# list of Cognito/Dynamo attributes you want to return
+# List of Cognito/Dynamo attributes you want to return
 RETURN_FIELDS = ["name", "id"]
 
+# Environment variables
+USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-2")
+SIGNUP_FUNCTION = "ProcessNewUserSupabase"
+CREATE_SESSION_FUNCTION = os.environ.get("CREATE_SESSION_FUNCTION", "CreateNewSession")
 
-# Environment, Cognito and Lambda clients
-USER_POOL_ID        = os.environ["COGNITO_USER_POOL_ID"]
-AWS_REGION          = os.environ.get("AWS_REGION", "us-east-2")
-SIGNUP_FUNCTION     = "ProcessNewUserSupabase"
-cognito   = boto3.client("cognito-idp", region_name=AWS_REGION)
-lambda_client = boto3.client("lambda", region_name=AWS_REGION)
-SESSIONS_TABLE      = os.environ.get("SESSIONS_TABLE", "Sessions")
+# Initialize AWS clients
+cognito = boto3.client("cognito-idp", region_name=AWS_REGION)
 
-# DynamoDB table for session storage
-dynamodb            = boto3.resource("dynamodb", region_name=AWS_REGION)
-sessions_table      = dynamodb.Table(SESSIONS_TABLE)
-
-
+def create_session(user_id: str) -> tuple[str, dict]:
+    """
+    Create a new session for the user using CreateNewSession Lambda.
+    Returns session ID and cookie.
+    """
+    try:
+        payload = {
+            "body": json.dumps({
+                "uid": user_id
+            })
+        }
+        
+        response = invoke(CREATE_SESSION_FUNCTION, payload)
+        response_body = json.loads(response.get("body", "{}"))
+        
+        if response.get("statusCode") != 200:
+            raise AuthorizationError(f"Failed to create session: {response_body.get('message', 'Unknown error')}")
+            
+        session_id = response_body.get("sessionId")
+        if not session_id:
+            raise AuthorizationError("No session ID returned from CreateNewSession")
+            
+        cookie = f"session_id={session_id}; HttpOnly; Secure; SameSite=None; Max-Age=2592000"
+        return session_id, cookie
+        
+    except Exception as e:
+        raise AuthorizationError(f"Failed to create session: {str(e)}")
 
 def google_login(email: str, name: str, cors_headers: dict) -> dict:
     """
     For Google provider:
     1. Check if user exists in Cognito (admin_get_user).
     2. If missing, invoke Signup Lambda (auto-create).
-    3. Issue session_id cookie.
+    3. Issue session_id cookie using CreateNewSession Lambda.
     """
     # 1) Find user by email
     user_id = None
@@ -50,58 +71,53 @@ def google_login(email: str, name: str, cors_headers: dict) -> dict:
         user_id = resp["Users"][0]["Username"]
         authType = "existing"
     else:
-        # 2) Auto-signup via Invoke, now passing a generated id
+        # 2) Auto-signup via utility invoke function
         user_id = str(uuid.uuid4())
         payload = {
             "body": json.dumps({
-                "id":       user_id,
-                "email":    email,
-                "name":     name,
+                "id": user_id,
+                "email": email,
+                "name": name,
                 "provider": "google"
             })
         }
-        resp = lambda_client.invoke(
-            FunctionName   = SIGNUP_FUNCTION,
-            InvocationType = "RequestResponse",
-            Payload        = json.dumps(payload).encode()
-        )
-        data = json.loads(resp["Payload"].read().decode())
-        print("Signup Lambda response:", data)
-        if data.get("statusCode") not in (200, 201):
+        try:
+            data = invoke(SIGNUP_FUNCTION, payload)
+            if data.get("statusCode") not in (200, 201):
+                return {
+                    "statusCode": data.get("statusCode", 500),
+                    "headers": cors_headers,
+                    "body": data.get("body", json.dumps({"message": "Signup failed"}))
+                }
+        except Exception as e:
             return {
-                "statusCode": data.get("statusCode", 500),
+                "statusCode": 500,
                 "headers": cors_headers,
-                "body": data.get("body", json.dumps({"message": "Signup failed"}))
+                "body": json.dumps({"message": f"Signup failed: {str(e)}"})
             }
         authType = "new"
 
-    # 3) Issue session cookie & prepare response body
-    # — generate & persist session —
-    session_id = str(uuid.uuid4())
-    now        = datetime.now(timezone.utc).isoformat()
-    expires    = int(time.time()) + 30*24*3600
-    sessions_table.put_item(Item={
-      "session_id": session_id,
-      "user_id":    user_id,
-      "created_at": now,
-      "expiration": expires
-    })
-
-    cookie = f"session_id={session_id}; HttpOnly; Secure; SameSite=None; Max-Age=2592000"
+    # 3) Create session using CreateNewSession Lambda
+    try:
+        session_id, cookie = create_session(user_id)
+    except AuthorizationError as e:
+        return {
+            "statusCode": 500,
+            "headers": cors_headers,
+            "body": json.dumps({"message": str(e)})
+        }
 
     headers = {
         **cors_headers,
         "Set-Cookie": cookie,
         "Content-Type": "application/json"
     }
-    # pick up configured RETURN_FIELDS
-    info = {}
-    for f in RETURN_FIELDS:
-        if f == "id":
-            info[f] = user_id
-        elif f == "name":
-            info[f] = name
-    # if in future you want to fetch from Cognito instead, you can replicate the admin_get_user logic from form.py
+
+    # Pick up configured RETURN_FIELDS
+    info = {
+        "id": user_id,
+        "name": name
+    }
 
     body = {"message": "Login successful (google)", **info, "authType": authType}
     response = {"statusCode": 200, "headers": headers, "body": json.dumps(body)}

@@ -11,6 +11,7 @@ from form import form_login
 from google import google_login
 import time
 from datetime import datetime, timezone
+from utils import invoke, parse_event, get_cors_headers
 
 
 # Environment & AWS clients
@@ -26,7 +27,6 @@ sessions_table = dynamodb.Table(SESSIONS_TABLE)
 
 
 VALID_PROVIDERS = ("form", "google")
-
 
 def get_cors_headers(event: dict) -> dict:
     """
@@ -53,6 +53,7 @@ def get_cors_headers(event: dict) -> dict:
 def lambda_handler(event, context):
     """
     Entry point: parse request, route to form or google flow, return HTTP response.
+    Uses utility functions for consistent event parsing and CORS handling.
     """
     cors_headers = get_cors_headers(event)
 
@@ -60,14 +61,14 @@ def lambda_handler(event, context):
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": cors_headers, "body": ""}
 
-    # Parse JSON body
+    # Parse request using utility function
     try:
-        payload  = json.loads(event.get("body") or "{}")
-        email    = payload["email"]
+        payload = parse_event(event)
+        email = payload["email"]
         provider = payload["provider"]
-        password = payload.get("password")  # required only for form
-        name     = payload.get("name")      # required only for google
-    except (json.JSONDecodeError, KeyError):
+        password = payload.get("password", "")  # required only for form
+        name = payload.get("name", "")      # required only for google
+    except (KeyError, json.JSONDecodeError) as e:
         return {
             "statusCode": 400,
             "headers": cors_headers,
@@ -82,30 +83,9 @@ def lambda_handler(event, context):
             "body": json.dumps({"message": f"Provider must be one of {VALID_PROVIDERS}"})
         }
 
-    # Route to provider-specific handler, with session cookie for form
+    # Route to provider-specific handler
     if provider == "form":
-        # 1) Authenticate with Cognito and get your id/access/refresh tokens
-        response = form_login(email, password, cors_headers)
-
-        # 2) generate & persist our own session
-        session_id = str(uuid.uuid4())
-        now        = datetime.now(timezone.utc).isoformat()
-        expires    = int(time.time()) + 30*24*3600
-        sessions_table.put_item(Item={
-          "session_id": session_id,
-          "user_id":    email,
-          "created_at": now,
-          "expiration": expires
-        })
-
-        # 3) append our session cookie to whatever Cognito set
-        session_cookie = f"session_id={session_id}; HttpOnly; Secure; SameSite=None; Max-Age=2592000"
-        headers        = response["headers"]
-        existing       = headers.get("Set-Cookie", "")
-        headers["Set-Cookie"] = ",".join(filter(None, [existing, session_cookie]))
-        response["headers"]   = headers
-        return response
-
+        return form_login(email, password, cors_headers)
     else:  # google
         if not name:
             return {
