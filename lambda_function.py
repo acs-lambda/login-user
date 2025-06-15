@@ -11,7 +11,7 @@ from form import form_login
 from google import google_login
 import time
 from datetime import datetime, timezone
-from utils import invoke, parse_event, get_cors_headers
+from utils import invoke, parse_event
 
 
 # Environment & AWS clients
