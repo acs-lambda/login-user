@@ -7,7 +7,7 @@ import os
 import json
 import boto3
 from datetime import datetime, timezone
-from utils import invoke, parse_event, create_response, LambdaError, invoke_lambda
+from utils import parse_event, create_response, LambdaError, invoke_lambda
 from login_logic import handle_login
 from config import logger
 
