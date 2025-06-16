@@ -11,7 +11,9 @@ from form import form_login
 from google import google_login
 import time
 from datetime import datetime, timezone
-from utils import invoke, parse_event
+from utils import invoke, parse_event, create_response, LambdaError, invoke_lambda
+from login_logic import handle_login
+from config import logger
 
 
 # Environment & AWS clients
@@ -28,76 +30,42 @@ sessions_table = dynamodb.Table(SESSIONS_TABLE)
 
 VALID_PROVIDERS = ("form", "google")
 
-def get_cors_headers(event: dict) -> dict:
-    """
-    Invoke Allow-Cors Lambda to get CORS headers. Fallback to defaults.
-    """
-    default = {
-        "Access-Control-Allow-Origin":      "*",
-        "Access-Control-Allow-Methods":     "OPTIONS, POST",
-        "Access-Control-Allow-Headers":     "Content-Type",
-        "Access-Control-Allow-Credentials": "true",
-    }
+def get_cors_headers():
     try:
-        resp = lambda_client.invoke(
-            FunctionName   = CORS_FUNCTION,
-            InvocationType = "RequestResponse",
-            Payload        = json.dumps(event).encode()
-        )
-        data = json.loads(resp["Payload"].read().decode())
-        return data.get("headers", default)
-    except Exception:
-        return default
-
+        response = invoke_lambda(CORS_FUNCTION, {})
+        return response.get('headers', {})
+    except Exception as e:
+        logger.error(f"Failed to fetch CORS headers: {e}")
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "OPTIONS, POST",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Credentials": "true",
+        }
 
 def lambda_handler(event, context):
-    """
-    Entry point: parse request, route to form or google flow, return HTTP response.
-    Uses utility functions for consistent event parsing and CORS handling.
-    """
-    cors_headers = get_cors_headers(event)
-
-    # Handle CORS preflight
+    cors_headers = get_cors_headers()
+    
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": cors_headers, "body": ""}
 
-    # Parse request using utility function
     try:
         payload = parse_event(event)
-        email = payload["email"]
-        provider = payload["provider"]
-        password = payload.get("password", "")  # required only for form
-        name = payload.get("name", "")      # required only for google
-    except (KeyError, json.JSONDecodeError) as e:
-        return {
-            "statusCode": 400,
-            "headers": cors_headers,
-            "body": json.dumps({"message": "Invalid request: email and provider required"})
-        }
+        email = payload.get("email")
+        provider = payload.get("provider")
+        password = payload.get("password")
+        name = payload.get("name")
 
-    # Validate provider
-    if provider not in VALID_PROVIDERS:
-        return {
-            "statusCode": 400,
-            "headers": cors_headers,
-            "body": json.dumps({"message": f"Provider must be one of {VALID_PROVIDERS}"})
-        }
+        if not email or not provider:
+            raise LambdaError(400, "Invalid request: email and provider required")
 
-    # Route to provider-specific handler
-    if provider == "form":
-        return form_login(email, password, cors_headers)
-    else:  # google
-        if not name:
-            return {
-                "statusCode": 400,
-                "headers": cors_headers,
-                "body": json.dumps({"message": "Name required for google signup/login"})
-            }
-        try:
-            return google_login(email, name, cors_headers)
-        except Exception as e:
-            return {
-                "statusCode": 500,
-                "headers": cors_headers,
-                "body": json.dumps({"message": str(e)})
-            }
+        body, cookies = handle_login(provider, email, password, name)
+        
+        headers = {**cors_headers, "Set-Cookie": ",".join(cookies)}
+        return create_response(200, body, headers=headers)
+
+    except LambdaError as e:
+        return create_response(e.status_code, {"message": e.message}, headers=cors_headers)
+    except Exception as e:
+        logger.error(f"Unhandled error in login handler: {e}")
+        return create_response(500, {"message": "Internal server error"}, headers=cors_headers)
