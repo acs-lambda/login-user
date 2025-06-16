@@ -6,10 +6,6 @@
 import os
 import json
 import boto3
-import uuid  # added for session cookie generation
-from form import form_login
-from google import google_login
-import time
 from datetime import datetime, timezone
 from utils import invoke, parse_event, create_response, LambdaError, invoke_lambda
 from login_logic import handle_login
