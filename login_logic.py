@@ -12,8 +12,8 @@ USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
 CLIENT_ID = os.environ["COGNITO_CLIENT_ID"]
 CLIENT_SECRET = os.environ.get("COGNITO_CLIENT_SECRET")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-2")
-SIGNUP_FUNCTION = "process-new-user-supabase"
-CREATE_SESSION_FUNCTION = os.environ.get("CREATE_SESSION_FUNCTION", "create-new-session")
+SIGNUP_FUNCTION = "ProcessNewUserSupabase"
+CREATE_SESSION_FUNCTION = os.environ.get("CREATE_SESSION_FUNCTION", "CreateNewSession")
 
 cognito = boto3.client("cognito-idp", region_name=AWS_REGION)
 
