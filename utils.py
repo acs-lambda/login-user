@@ -15,10 +15,13 @@ class LambdaError(Exception):
 class AuthorizationError(Exception):
     pass
 
-def create_response(status_code, body):
+def create_response(status_code, body, headers=None):
+    default_headers = {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
+    if headers:
+        default_headers.update(headers)
     return {
         "statusCode": status_code,
-        "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+        "headers": default_headers,
         "body": json.dumps(body),
     }
 
