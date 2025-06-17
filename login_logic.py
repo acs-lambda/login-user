@@ -88,7 +88,13 @@ def google_login_flow(email, name):
         else:
             user_id = str(uuid.uuid4())
             payload = {"body": json.dumps({"id": user_id, "email": email, "name": name, "provider": "google"})}
-            invoke_lambda(SIGNUP_FUNCTION, payload)
+            print(f"DEBUG: Calling signup function with payload: {payload}")
+            try:
+                response = invoke_lambda(SIGNUP_FUNCTION, payload)
+                print(f"DEBUG: Signup function response: {response}")
+            except Exception as signup_error:
+                print(f"DEBUG: Signup function failed: {signup_error}")
+                raise signup_error
             authType = "new"
 
         session_id, cookie = create_session(user_id)
@@ -97,6 +103,7 @@ def google_login_flow(email, name):
         return body, [cookie]
 
     except Exception as e:
+        print(f"DEBUG: Google login flow failed: {e}")
         raise LambdaError(500, f"Internal server error during google login: {e}")
 
 def handle_login(provider, email, password, name):
